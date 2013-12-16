@@ -16,6 +16,8 @@ use Kernel::System::FAQ;
 use Kernel::System::SearchProfile;
 use Kernel::System::CSV;
 use Kernel::System::VariableCheck qw(:all);
+use Kernel::System::DynamicField;
+use Kernel::System::DynamicField::Backend;
 
 sub new {
     my ( $Type, %Param ) = @_;
@@ -35,6 +37,8 @@ sub new {
     $Self->{FAQObject}           = Kernel::System::FAQ->new(%Param);
     $Self->{SearchProfileObject} = Kernel::System::SearchProfile->new(%Param);
     $Self->{CSVObject}           = Kernel::System::CSV->new(%Param);
+    $Self->{DynamicFieldObject}  = Kernel::System::DynamicField->new(%Param);
+    $Self->{BackendObject}       = Kernel::System::DynamicField::Backend->new(%Param);
 
     # get config for frontend
     $Self->{Config} = $Self->{ConfigObject}->Get("FAQ::Frontend::$Self->{Action}");
@@ -50,6 +54,23 @@ sub new {
     );
 
     $Self->{MultiLanguage} = $Self->{ConfigObject}->Get('FAQ::MultiLanguage');
+
+    # get dynamic field config for frontend module
+    $Self->{DynamicFieldFilter} = $Self->{Config}->{DynamicField};
+
+    # get the dynamic fields for FAQ object
+    $Self->{DynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
+        Valid       => 1,
+        ObjectType  => 'FAQ',
+        FieldFilter => $Self->{DynamicFieldFilter} || {},
+    );
+
+    # get the FAQ dynamic fields for CSV display
+    $Self->{CSVDynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
+        Valid       => 1,
+        ObjectType  => 'FAQ',
+        FieldFilter => $Self->{Config}->{SearchCSVDynamicField} || {},
+    );
 
     return $Self;
 }
@@ -161,6 +182,26 @@ sub Run {
                 $GetParam{$ParamName} = \@Array;
             }
         }
+
+        # get Dynamic fields form param object
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            # extract the dynamic field value form the web request
+            my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                DynamicFieldConfig     => $DynamicFieldConfig,
+                ParamObject            => $Self->{ParamObject},
+                ReturnProfileStructure => 1,
+                LayoutObject           => $Self->{LayoutObject},
+            );
+
+            # set the comple value structure in GetParam to store it later in the search profile
+            if ( IsHashRefWithData($DynamicFieldValue) ) {
+                %GetParam = ( %GetParam, %{$DynamicFieldValue} );
+            }
+        }
     }
 
     # check if item need to get excluded
@@ -269,6 +310,33 @@ sub Run {
                         UserLogin => $Self->{UserLogin},
                     );
                 }
+            }
+        }
+
+        # dynamic fields search parameters for FAQ search
+        my %DynamicFieldSearchParameters;
+        my %DynamicFieldSearchDisplay;
+
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            # extract the dynamic field value form the web request
+            my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+                DynamicFieldConfig => $DynamicFieldConfig,
+                Profile            => \%GetParam,
+                LayoutObject       => $Self->{LayoutObject},
+            );
+
+            # set search parameter
+            if ( defined $SearchParameter ) {
+                $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                    = $SearchParameter->{Parameter};
+
+                # set value to display
+                $DynamicFieldSearchDisplay{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                    = $SearchParameter->{Display};
             }
         }
 
@@ -392,6 +460,7 @@ sub Run {
             ContentSearchPrefix => '*',
             ContentSearchSuffix => '*',
             %GetParam,
+            %DynamicFieldSearchParameters,
         );
 
         # CSV output
@@ -433,11 +502,53 @@ sub Run {
                         push @CSVHead, 'Language';
                     }
 
+                    # include the selected dynamic fields on CVS resutls
+                    DYNAMICFIELD:
+                    for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+                        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+                        next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+                        next DYNAMICFIELD if $DynamicFieldConfig->{Name} eq '';
+
+                        push @CSVHead, 'DynamicField_' . $DynamicFieldConfig->{Name};
+                    }
+
                     push @CSVHead, qw(State Changed);
                 }
                 my @Data;
                 for my $Header (@CSVHead) {
-                    push @Data, $CSVInfo{$Header};
+
+                    # check if header is a dynamic field and get the value from dynamic field
+                    # backend
+                    if ( $Header =~ m{\A DynamicField_ ( [a-zA-Z\d]+ ) \z}xms ) {
+
+                        # loop over the dynamic fields configured for CSV output
+                        DYNAMICFIELD:
+                        for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+                            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+                            next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+
+                            # skip all fields that does not match with current field name ($1)
+                            # with out the 'DynamicField_' prefix
+                            next DYNAMICFIELD if $DynamicFieldConfig->{Name} ne $1;
+
+                            # get the value as for print (to corretly display)
+                            my $ValueStrg = $Self->{BackendObject}->DisplayValueRender(
+                                DynamicFieldConfig => $DynamicFieldConfig,
+                                Value              => $CSVInfo{$Header},
+                                HTMLOutput         => 0,
+                                LayoutObject       => $Self->{LayoutObject},
+                            );
+                            push @Data, $ValueStrg->{Value};
+
+                            # terminate the DYNAMICFIELD loop
+                            last DYNAMICFIELD;
+                        }
+                    }
+
+                    # otherwise retreive data from article
+                    else {
+                        push @Data, $CSVInfo{$Header};
+                    }
                 }
                 push @CSVData, \@Data;
             }
@@ -848,6 +959,49 @@ sub Run {
             $Self->{Profile} = '';
         }
 
+        # create HTML strings for all dynamic fields
+        my %DynamicFieldHTML;
+
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            my $PossibleValuesFilter;
+
+            # check if field has PossibleValues property in its configuration
+            if ( IsHashRefWithData( $DynamicFieldConfig->{Config}->{PossibleValues} ) ) {
+
+                # get historical values from database
+                my $HistoricalValues = $Self->{BackendObject}->HistoricalValuesGet(
+                    DynamicFieldConfig => $DynamicFieldConfig,
+                );
+
+                my $Data = $DynamicFieldConfig->{Config}->{PossibleValues};
+
+                # add historic values to current values (if they don't exist anymore)
+                if ( IsHashRefWithData($HistoricalValues) ) {
+                    for my $Key ( keys %{$HistoricalValues} ) {
+                        if ( !$Data->{$Key} ) {
+                            $Data->{$Key} = $HistoricalValues->{$Key}
+                        }
+                    }
+                }
+            }
+
+            # get field html
+            $DynamicFieldHTML{ $DynamicFieldConfig->{Name} } =
+                $Self->{BackendObject}->SearchFieldRender(
+                DynamicFieldConfig   => $DynamicFieldConfig,
+                Profile              => \%GetParam,
+                PossibleValuesFilter => $PossibleValuesFilter,
+                DefaultValue =>
+                    $Self->{Config}->{Defaults}->{DynamicField}->{ $DynamicFieldConfig->{Name} },
+                LayoutObject           => $Self->{LayoutObject},
+                ConfirmationCheckboxes => 1,
+                );
+        }
+
         # generate search mask
         my $Output = $Self->{LayoutObject}->CustomerHeader();
         $Output .= $Self->{LayoutObject}->CustomerNavigationBar();
@@ -855,6 +1009,7 @@ sub Run {
             %GetParam,
             Profile => $Self->{Profile},
             Area    => 'Customer',
+            DynamicFieldHTML => \%DynamicFieldHTML
         );
         $Output .= $Self->{LayoutObject}->CustomerFooter();
         return $Output;
@@ -1015,6 +1170,26 @@ sub MaskForm {
         Name => 'Search',
         Data => {%Param},
     );
+
+    # output Dynamic fields blocks
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        # skip fields if HTML could not be retrieved
+        next DYNAMICFIELD if !IsHashRefWithData(
+            $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }
+        );
+
+        $Self->{LayoutObject}->Block(
+            Name => 'DynamicField',
+            Data => {
+                Label => $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }->{Label},
+                Field => $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }->{Field},
+            },
+        );
+    }
 
     # show languages select
     if ( $Self->{MultiLanguage} ) {

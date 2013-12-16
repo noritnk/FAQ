@@ -17,6 +17,8 @@ use Kernel::System::SearchProfile;
 use Kernel::System::CSV;
 use Kernel::System::Valid;
 use Kernel::System::VariableCheck qw(:all);
+use Kernel::System::DynamicField;
+use Kernel::System::DynamicField::Backend;
 
 sub new {
     my ( $Type, %Param ) = @_;
@@ -40,6 +42,8 @@ sub new {
     $Self->{SearchProfileObject} = Kernel::System::SearchProfile->new(%Param);
     $Self->{CSVObject}           = Kernel::System::CSV->new(%Param);
     $Self->{ValidObject}         = Kernel::System::Valid->new(%Param);
+    $Self->{DynamicFieldObject}  = Kernel::System::DynamicField->new(%Param);
+    $Self->{BackendObject}       = Kernel::System::DynamicField::Backend->new(%Param);
 
     # get config for frontend
     $Self->{Config} = $Self->{ConfigObject}->Get("FAQ::Frontend::$Self->{Action}");
@@ -55,6 +59,20 @@ sub new {
     );
 
     $Self->{MultiLanguage} = $Self->{ConfigObject}->Get('FAQ::MultiLanguage');
+
+    # get the dynamic fields for FAQ object
+    $Self->{DynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
+        Valid       => 1,
+        ObjectType  => 'FAQ',
+        FieldFilter => $Self->{DynamicFieldFilter} || {},
+    );
+
+    # get the FAQ dynamic fields for CSV display
+    $Self->{CSVDynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
+        Valid       => 1,
+        ObjectType  => 'FAQ',
+        FieldFilter => $Self->{Config}->{SearchCSVDynamicField} || {},
+    );
 
     return $Self;
 }
@@ -167,6 +185,26 @@ sub Run {
             my @Array = $Self->{ParamObject}->GetArray( Param => $SearchParam );
             if (@Array) {
                 $GetParam{$SearchParam} = \@Array;
+            }
+        }
+
+        # get Dynamic fields form param object
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            # extract the dynamic field value form the web request
+            my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                DynamicFieldConfig     => $DynamicFieldConfig,
+                ParamObject            => $Self->{ParamObject},
+                ReturnProfileStructure => 1,
+                LayoutObject           => $Self->{LayoutObject},
+            );
+
+            # set the comple value structure in GetParam to store it later in the search profile
+            if ( IsHashRefWithData($DynamicFieldValue) ) {
+                %GetParam = ( %GetParam, %{$DynamicFieldValue} );
             }
         }
     }
@@ -346,6 +384,39 @@ sub Run {
             }
         }
 
+        my %AttributeLookup;
+
+        # create attibute lookup table
+        for my $Attribute ( @{ $GetParam{ShownAttributes} || [] } ) {
+            $AttributeLookup{$Attribute} = 1;
+        }
+
+        # dynamic fields search parameters for FAQ search
+        my %DynamicFieldSearchParameters;
+
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+            next DYNAMICFIELD
+                if !$AttributeLookup{ 'LabelSearch_DynamicField_' . $DynamicFieldConfig->{Name} };
+
+            # extract the dynamic field value form the profile
+            my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+                DynamicFieldConfig => $DynamicFieldConfig,
+                Profile            => \%GetParam,
+                LayoutObject       => $Self->{LayoutObject},
+            );
+
+            # set search parameter
+            if ( defined $SearchParameter ) {
+                $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                    = $SearchParameter->{Parameter};
+            }
+
+            # set value to display
+        }
+
         # prepare fulltext search
         if ( $GetParam{Fulltext} ) {
             $GetParam{ContentSearch} = 'OR';
@@ -395,6 +466,7 @@ sub Run {
             ContentSearchSuffix => '*',
             ValidIDs            => \@AllValidIDs,
             %GetParam,
+            %DynamicFieldSearchParameters,
         );
 
         # CSV output
@@ -435,13 +507,55 @@ sub Run {
                         push @CSVHead, 'Language';
                     }
 
+                    # include the selected dynamic fields on CVS resutls
+                    DYNAMICFIELD:
+                    for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+                        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+                        next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+                        next DYNAMICFIELD if $DynamicFieldConfig->{Name} eq '';
+
+                        push @CSVHead, 'DynamicField_' . $DynamicFieldConfig->{Name};
+                    }
+
                     push @CSVHead, qw(State Changed);
                 }
 
                 # inssert data
                 my @Data;
                 for my $Header (@CSVHead) {
-                    push @Data, $CSVInfo{$Header};
+
+                    # check if header is a dynamic field and get the value from dynamic field
+                    # backend
+                    if ( $Header =~ m{\A DynamicField_ ( [a-zA-Z\d]+ ) \z}xms ) {
+
+                        # loop over the dynamic fields configured for CSV output
+                        DYNAMICFIELD:
+                        for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+                            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+                            next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+
+                            # skip all fields that does not match with current field name ($1)
+                            # with out the 'DynamicField_' prefix
+                            next DYNAMICFIELD if $DynamicFieldConfig->{Name} ne $1;
+
+                            # get the value as for print (to corretly display)
+                            my $ValueStrg = $Self->{BackendObject}->DisplayValueRender(
+                                DynamicFieldConfig => $DynamicFieldConfig,
+                                Value              => $CSVInfo{$Header},
+                                HTMLOutput         => 0,
+                                LayoutObject       => $Self->{LayoutObject},
+                            );
+                            push @Data, $ValueStrg->{Value};
+
+                            # terminate the DYNAMICFIELD loop
+                            last DYNAMICFIELD;
+                        }
+                    }
+
+                    # otherwise retreive data from article
+                    else {
+                        push @Data, $CSVInfo{$Header};
+                    }
                 }
                 push @CSVData, \@Data;
             }
@@ -880,6 +994,7 @@ sub _MaskForm {
             ATTRIBUTE:
             for my $Attribute ( sort keys %{ $Self->{Config}->{Defaults} } ) {
                 next ATTRIBUTE if !$Self->{Config}->{Defaults}->{$Attribute};
+                next if $Attribute eq 'DynamicField';
                 $GetParam{$Attribute} = $Self->{Config}->{Defaults}->{$Attribute};
             }
         }
@@ -965,6 +1080,89 @@ sub _MaskForm {
             Value => 'FAQ Item Change Time (between)',
         },
     );
+
+    my $DynamicFieldSeparator = 1;
+
+    # create dynamic fields seaarch options for attribute select
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+        next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+        next DYNAMICFIELD if $DynamicFieldConfig->{Name} eq '';
+
+        # create a separator for dynamic fields attributes
+        if ($DynamicFieldSeparator) {
+            push @Attributes, (
+                {
+                    Key      => '',
+                    Value    => '-',
+                    Disabled => 1,
+                },
+            );
+
+            $DynamicFieldSeparator = 0;
+        }
+
+        push @Attributes, (
+            {
+                Key   => 'Search_DynamicField_' . $DynamicFieldConfig->{Name},
+                Value => $Self->{LayoutObject}->{LanguageObject}->Get(
+                    $DynamicFieldConfig->{Label}
+                ),
+            },
+        );
+    }
+
+    # create a separator if a dynamic field attribute was pushed
+    if ( !$DynamicFieldSeparator ) {
+        push @Attributes, (
+            {
+                Key      => '',
+                Value    => '-',
+                Disabled => 1,
+            },
+        );
+    }
+
+    # create HTML strings for all dynamic fields
+    my %DynamicFieldHTML;
+
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        # check if field has PossibleValues property in its configuration
+        if ( IsHashRefWithData( $DynamicFieldConfig->{Config}->{PossibleValues} ) ) {
+
+            # get historical values from database
+            my $HistoricalValues = $Self->{BackendObject}->HistoricalValuesGet(
+                DynamicFieldConfig => $DynamicFieldConfig,
+            );
+
+            my $Data = $DynamicFieldConfig->{Config}->{PossibleValues};
+
+            # add historic values to current values (if they don't exist anymore)
+            if ( IsHashRefWithData($HistoricalValues) ) {
+                for my $Key ( keys %{$HistoricalValues} ) {
+                    if ( !$Data->{$Key} ) {
+                        $Data->{$Key} = $HistoricalValues->{$Key}
+                    }
+                }
+            }
+        }
+
+        # get field html
+        $DynamicFieldHTML{ $DynamicFieldConfig->{Name} } =
+            $Self->{BackendObject}->SearchFieldRender(
+            DynamicFieldConfig   => $DynamicFieldConfig,
+            Profile              => \%GetParam,
+            DefaultValue =>
+                $Self->{Config}->{Defaults}->{DynamicField}->{ $DynamicFieldConfig->{Name} },
+            LayoutObject => $Self->{LayoutObject},
+            );
+    }
 
     # dropdown menu for 'attributes'
     $Param{AttributesStrg} = $Self->{LayoutObject}->BuildSelection(
@@ -1249,6 +1447,26 @@ sub _MaskForm {
             EmptySearch => $EmptySearch,
         },
     );
+
+    # output Dynamic fields blocks
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        # skip fields that HTML could not be retrieved
+        next DYNAMICFIELD if !IsHashRefWithData(
+            $DynamicFieldHTML{ $DynamicFieldConfig->{Name} }
+        );
+
+        $Self->{LayoutObject}->Block(
+            Name => 'DynamicField',
+            Data => {
+                Label => $DynamicFieldHTML{ $DynamicFieldConfig->{Name} }->{Label},
+                Field => $DynamicFieldHTML{ $DynamicFieldConfig->{Name} }->{Field},
+            },
+        );
+    }
 
     # show attributes
     my %AlreadyShown;
