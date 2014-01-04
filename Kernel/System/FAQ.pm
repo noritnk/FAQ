@@ -120,15 +120,10 @@ sub new {
 
     # create the DynamicFieldBackendObject passing $Self as FAQObject, this is needed to
     # add history and delete cache
-    if ( $Param{DynamicFieldBackendObject} ) {
-        $Self->{DynamicFieldBackendObject} = $Param{DynamicFieldBackendObject};
-    }
-    else {
-        $Self->{DynamicFieldBackendObject} = Kernel::System::DynamicField::Backend->new(
-            %{$Self},
-            FAQObject => $Self,
-        );
-    }
+    $Self->{DynamicFieldBackendObject} = Kernel::System::DynamicField::Backend->new(
+        %{$Self},
+        FAQObject => $Self,
+    );
 
     # get like escape string needed for some databases (e.g. oracle)
     $Self->{LikeEscapeString} = $Self->{DBObject}->GetDatabaseFunction('LikeEscapeString');

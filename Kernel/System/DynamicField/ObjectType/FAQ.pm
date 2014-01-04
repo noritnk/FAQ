@@ -64,16 +64,6 @@ sub new {
         Scalar::Util::weaken( $Self->{FAQObject} );
     }
 
-    # otherwise create it
-    else {
-
-        # Here we must not call weaken(), because this is the only reference
-        $Self->{FAQObject} = Kernel::System::FAQ->new(
-            %{$Self},
-            DynamicFieldBackendObject => $Self,
-        );
-    }
-
     return $Self;
 }
 
@@ -120,6 +110,13 @@ sub PostValueSet {
             );
             return;
         }
+    }
+
+    # check for FAQObject
+    if ( !$Self->{FAQObject} ) {
+
+        # create it on demand
+        $Self->{FAQObject} = Kernel::System::FAQ->new(%{$Self});
     }
 
     # history insert
