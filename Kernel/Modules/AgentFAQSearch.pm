@@ -60,6 +60,9 @@ sub new {
 
     $Self->{MultiLanguage} = $Self->{ConfigObject}->Get('FAQ::MultiLanguage');
 
+    # get dynamic field config for frontend module
+    $Self->{DynamicFieldFilter} = $Self->{Config}->{DynamicField};
+
     # get the dynamic fields for FAQ object
     $Self->{DynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
         Valid       => 1,

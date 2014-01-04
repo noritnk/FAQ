@@ -950,7 +950,7 @@ sub FAQSearch {
     # if there is a possibility that the ordering is not determined
     # we add an descending ordering by id
     if ( !grep { $_ eq 'FAQID' } ( @{ $Param{OrderBy} } ) ) {
-        if ( $#{ $Param{OrderBy} >= 0 ) {
+        if ( $#{ $Param{OrderBy} } >= 0 ) {
             $Ext .= ',';
         }
         $Ext .= ' ' . $OrderByTable{FAQID} . ' DESC';
