@@ -474,6 +474,7 @@ sub Run {
 
         # CSV output
         if ( $GetParam{ResultForm} eq 'CSV' ) {
+            my @TmpCSVHead;
             my @CSVHead;
             my @CSVData;
 
@@ -481,34 +482,33 @@ sub Run {
 
                 # get FAQ data details
                 my %FAQData = $Self->{FAQObject}->FAQGet(
-                    ItemID     => $FAQID,
-                    ItemFields => 0,
-                    UserID     => $Self->{UserID},
+                    ItemID        => $FAQID,
+                    ItemFields    => 0,
+                    DynamicFields => 1,
+                    UserID        => $Self->{UserID},
                 );
 
-                my $Changed = $Self->{LayoutObject}->Output(
+                # get info for CSV output
+                my %CSVInfo = ( %FAQData );
+
+                $CSVInfo{Changed} = $Self->{LayoutObject}->Output(
                     Template => '$TimeLong{"$Data{"Changed"}"}',
                     Data     => \%FAQData,
                 );
 
-                # get info for CSV output
-                my %CSVInfo = (
-                    FAQNumber => $FAQData{Number},
-                    Title     => $FAQData{Title},
-                    Category  => $FAQData{CategoryName},
-                    Language  => $FAQData{Language},
-                    State     => $FAQData{State},
-                    Changed   => $Changed,
-                );
-
                 # csv quote
                 if ( !@CSVHead ) {
-                    @CSVHead = qw( FAQNumber Title Category);
+                    @TmpCSVHead = qw( FAQNumber Title Category);
+                    @CSVHead    = qw( FAQNumber Title Category);
 
                     # insert language header
                     if ( $Self->{MultiLanguage} ) {
+                        push @TmpCSVHead, 'Language';
                         push @CSVHead, 'Language';
                     }
+
+                    push @TmpCSVHead, qw(State Changed);
+                    push @CSVHead, qw(State Changed);
 
                     # include the selected dynamic fields on CVS resutls
                     DYNAMICFIELD:
@@ -517,15 +517,14 @@ sub Run {
                         next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
                         next DYNAMICFIELD if $DynamicFieldConfig->{Name} eq '';
 
-                        push @CSVHead, 'DynamicField_' . $DynamicFieldConfig->{Name};
+                        push @TmpCSVHead, 'DynamicField_' . $DynamicFieldConfig->{Name};
+                        push @CSVHead, $DynamicFieldConfig->{Label};
                     }
-
-                    push @CSVHead, qw(State Changed);
                 }
 
                 # inssert data
                 my @Data;
-                for my $Header (@CSVHead) {
+                for my $Header (@TmpCSVHead) {
 
                     # check if header is a dynamic field and get the value from dynamic field
                     # backend
@@ -555,7 +554,7 @@ sub Run {
                         }
                     }
 
-                    # otherwise retreive data from article
+                    # otherwise retreive data from faq item
                     else {
                         push @Data, $CSVInfo{$Header};
                     }
@@ -566,14 +565,28 @@ sub Run {
             # csv quote
             # translate non existing header may result in a garbage file
             if ( !@CSVHead ) {
-                @CSVHead = qw(FAQNumber Title Category);
+                @TmpCSVHead = qw(FAQNumber Title Category);
+                @CSVHead    = qw(FAQNumber Title Category);
 
                 # insert language header
                 if ( $Self->{MultiLanguage} ) {
+                    push @TmpCSVHead, 'Language';
                     push @CSVHead, 'Language';
                 }
 
+                push @TmpCSVHead, qw(State Changed);
                 push @CSVHead, qw(State Changed);
+
+                # include the selected dynamic fields on CVS resutls
+                DYNAMICFIELD:
+                for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+                    next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+                    next DYNAMICFIELD if !$DynamicFieldConfig->{Name};
+                    next DYNAMICFIELD if $DynamicFieldConfig->{Name} eq '';
+
+                    push @TmpCSVHead, 'DynamicField_' . $DynamicFieldConfig->{Name};
+                    push @CSVHead, $DynamicFieldConfig->{Label};
+                }
             }
 
             # translate headers

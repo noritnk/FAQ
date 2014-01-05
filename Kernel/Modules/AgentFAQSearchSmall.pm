@@ -15,6 +15,8 @@ use warnings;
 use Kernel::System::FAQ;
 use Kernel::System::SearchProfile;
 use Kernel::System::Valid;
+use Kernel::System::DynamicField;
+use Kernel::System::DynamicField::Backend;
 use Kernel::System::VariableCheck qw(:all);
 
 sub new {
@@ -38,6 +40,8 @@ sub new {
     $Self->{FAQObject}           = Kernel::System::FAQ->new(%Param);
     $Self->{SearchProfileObject} = Kernel::System::SearchProfile->new(%Param);
     $Self->{ValidObject}         = Kernel::System::Valid->new(%Param);
+    $Self->{DynamicFieldObject}  = Kernel::System::DynamicField->new(%Param);
+    $Self->{BackendObject}       = Kernel::System::DynamicField::Backend->new(%Param);
 
     # get config for frontend
     $Self->{Config} = $Self->{ConfigObject}->Get("FAQ::Frontend::AgentFAQSearch");
@@ -53,6 +57,16 @@ sub new {
     );
 
     $Self->{MultiLanguage} = $Self->{ConfigObject}->Get('FAQ::MultiLanguage');
+
+    # get dynamic field config for frontend module
+    $Self->{DynamicFieldFilter} = $Self->{Config}->{DynamicField};
+
+    # get the dynamic fields for ticket object
+    $Self->{DynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
+        Valid       => 1,
+        ObjectType  => [ 'FAQ ],
+        FieldFilter => $Self->{DynamicFieldFilter} || {},
+    );
 
     return $Self;
 }
@@ -138,6 +152,26 @@ sub Run {
             my @Array = $Self->{ParamObject}->GetArray( Param => $SearchParam );
             if (@Array) {
                 $GetParam{$SearchParam} = \@Array;
+            }
+        }
+
+        # get Dynamic fields from param object
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            # extract the dynamic field value from the web request
+            my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                DynamicFieldConfig     => $DynamicFieldConfig,
+                ParamObject            => $Self->{ParamObject},
+                ReturnProfileStructure => 1,
+                LayoutObject           => $Self->{LayoutObject},
+            );
+
+            # set the complete value structure in GetParam to store it later in the search profile
+            if ( IsHashRefWithData($DynamicFieldValue) ) {
+                %GetParam = ( %GetParam, %{$DynamicFieldValue} );
             }
         }
     }
@@ -385,6 +419,30 @@ sub Run {
             };
         }
 
+        # dynamic fields search parameters for ticket search
+        my %DynamicFieldSearchParameters;
+
+        # cycle trough the activated Dynamic Fields for this screen
+        DYNAMICFIELD:
+        for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+            next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+            # extract the dynamic field value from the profile
+            my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+                DynamicFieldConfig => $DynamicFieldConfig,
+                Profile            => \%GetParam,
+                LayoutObject       => $Self->{LayoutObject},
+            );
+
+            # set search parameter
+            if ( defined $SearchParameter ) {
+                $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                    = $SearchParameter->{Parameter};
+            }
+
+            # set value to display
+        }
+
         # perform FAQ search
         # default search on all valid ids, this can be overwritten by %GetParam
         my @ViewableFAQIDs = $Self->{FAQObject}->FAQSearch(
@@ -398,6 +456,7 @@ sub Run {
             ContentSearchSuffix => '*',
             ValidIDs            => \@AllValidIDs,
             %GetParam,
+            %DynamicFieldSearchParameters,
         );
 
         # start html page
