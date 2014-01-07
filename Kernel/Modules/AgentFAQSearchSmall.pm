@@ -155,23 +155,35 @@ sub Run {
             }
         }
 
-        # get Dynamic fields from param object
+        # get Dynamic fields form param object
         # cycle trough the activated Dynamic Fields for this screen
         DYNAMICFIELD:
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
             next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-            # extract the dynamic field value from the web request
-            my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
-                DynamicFieldConfig     => $DynamicFieldConfig,
-                ParamObject            => $Self->{ParamObject},
-                ReturnProfileStructure => 1,
-                LayoutObject           => $Self->{LayoutObject},
+            # get search field preferences
+            my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+                DynamicFieldConfig => $DynamicFieldConfig,
             );
 
-            # set the complete value structure in GetParam to store it later in the search profile
-            if ( IsHashRefWithData($DynamicFieldValue) ) {
-                %GetParam = ( %GetParam, %{$DynamicFieldValue} );
+            next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
+
+            PREFERENCE:
+            for my $Preference ( @{$SearchFieldPreferences} ) {
+
+                # extract the dynamic field value from the web request
+                my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                    DynamicFieldConfig     => $DynamicFieldConfig,
+                    ParamObject            => $Self->{ParamObject},
+                    ReturnProfileStructure => 1,
+                    LayoutObject           => $Self->{LayoutObject},
+                    Type                   => $Preference->{Type},
+                );
+
+              # set the complete value structure in GetParam to store it later in the search profile
+                if ( IsHashRefWithData($DynamicFieldValue) ) {
+                    %GetParam = ( %GetParam, %{$DynamicFieldValue} );
+                }
             }
         }
     }
@@ -419,7 +431,7 @@ sub Run {
             };
         }
 
-        # dynamic fields search parameters for ticket search
+        # dynamic fields search parameters for FAQ search
         my %DynamicFieldSearchParameters;
 
         # cycle trough the activated Dynamic Fields for this screen
@@ -427,20 +439,41 @@ sub Run {
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
             next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-            # extract the dynamic field value from the profile
-            my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+            # get search field preferences
+            my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
                 DynamicFieldConfig => $DynamicFieldConfig,
-                Profile            => \%GetParam,
-                LayoutObject       => $Self->{LayoutObject},
             );
 
-            # set search parameter
-            if ( defined $SearchParameter ) {
-                $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
-                    = $SearchParameter->{Parameter};
-            }
+            next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
 
-            # set value to display
+            PREFERENCE:
+            for my $Preference ( @{$SearchFieldPreferences} ) {
+
+                if (
+                    !$AttributeLookup{
+                        'LabelSearch_DynamicField_'
+                            . $DynamicFieldConfig->{Name}
+                            . $Preference->{Type}
+                    }
+                    )
+                {
+                    next PREFERENCE;
+                }
+
+                # extract the dynamic field value from the profile
+                my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+                    DynamicFieldConfig => $DynamicFieldConfig,
+                    Profile            => \%GetParam,
+                    LayoutObject       => $Self->{LayoutObject},
+                    Type               => $Preference->{Type},
+                );
+
+                # set search parameter
+                if ( defined $SearchParameter ) {
+                    $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                        = $SearchParameter->{Parameter};
+                }
+            }
         }
 
         # perform FAQ search
@@ -822,6 +855,38 @@ sub _MaskForm {
         Format => 'DateInputFormat',
     );
 
+    # create HTML strings for all dynamic fields
+    my %DynamicFieldHTML;
+
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        # get search field preferences
+        my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+            DynamicFieldConfig => $DynamicFieldConfig,
+        );
+
+        next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
+
+        PREFERENCE:
+        for my $Preference ( @{$SearchFieldPreferences} ) {
+
+            # get field html
+            $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+                = $Self->{BackendObject}->SearchFieldRender(
+                DynamicFieldConfig   => $DynamicFieldConfig,
+                Profile              => \%GetParam,
+                DefaultValue =>
+                    $Self->{Config}->{Defaults}->{DynamicField}
+                    ->{ $DynamicFieldConfig->{Name} },
+                LayoutObject => $Self->{LayoutObject},
+                Type         => $Preference->{Type},
+                );
+        }
+    }
+
     # html search mask output
     $Self->{LayoutObject}->Block(
         Name => 'Search',
@@ -834,6 +899,41 @@ sub _MaskForm {
             Name => 'Language',
             Data => {%Param},
         );
+    }
+
+    # output Dynamic fields blocks
+    # cycle trough the activated Dynamic Fields for this screen
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        # get search field preferences
+        my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+            DynamicFieldConfig => $DynamicFieldConfig,
+        );
+
+        next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
+
+        PREFERENCE:
+        for my $Preference ( @{$SearchFieldPreferences} ) {
+
+            # skip fields that HTML could not be retrieved
+            next PREFERENCE if !IsHashRefWithData(
+                $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+            );
+
+            $Self->{LayoutObject}->Block(
+                Name => 'DynamicField',
+                Data => {
+                    Label =>
+                        $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+                        ->{Label},
+                    Field =>
+                        $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+                        ->{Field},
+                },
+            );
+        }
     }
 
     # html search mask output

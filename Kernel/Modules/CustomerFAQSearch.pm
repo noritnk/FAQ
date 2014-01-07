@@ -65,6 +65,22 @@ sub new {
         FieldFilter => $Self->{DynamicFieldFilter} || {},
     );
 
+    # reduce the dynamic fields to only the ones that are desinged for customer interface
+    my @CustomerDynamicFields;
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        my $IsCustomerInterfaceCapable = $Self->{BackendObject}->HasBehavior(
+            DynamicFieldConfig => $DynamicFieldConfig,
+            Behavior           => 'IsCustomerInterfaceCapable',
+        );
+        next DYNAMICFIELD if !$IsCustomerInterfaceCapable;
+
+        push @CustomerDynamicFields, $DynamicFieldConfig;
+    }
+    $Self->{DynamicField} = \@CustomerDynamicFields;
+
     # get the ticket dynamic fields for overview display
     $Self->{OverviewDynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
         Valid       => 1,
@@ -72,12 +88,43 @@ sub new {
         FieldFilter => $Self->{Config}->{SearchOverviewDynamicField} || {},
     );
 
+    # reduce the dynamic fields to only the ones that are desinged for customer interface
+    my @OverviewCustomerDynamicFields;
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{OverviewDynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        my $IsCustomerInterfaceCapable = $Self->{BackendObject}->HasBehavior(
+            DynamicFieldConfig => $DynamicFieldConfig,
+            Behavior           => 'IsCustomerInterfaceCapable',
+        );
+        next DYNAMICFIELD if !$IsCustomerInterfaceCapable;
+
+        push @OverviewCustomerDynamicFields, $DynamicFieldConfig;
+    }
+
     # get the FAQ dynamic fields for CSV display
     $Self->{CSVDynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
         Valid       => 1,
         ObjectType  => 'FAQ',
         FieldFilter => $Self->{Config}->{SearchCSVDynamicField} || {},
     );
+
+    # reduce the dynamic fields to only the ones that are desinged for customer interface
+    my @CSVCustomerDynamicFields;
+    DYNAMICFIELD:
+    for my $DynamicFieldConfig ( @{ $Self->{CSVDynamicField} } ) {
+        next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
+
+        my $IsCustomerInterfaceCapable = $Self->{BackendObject}->HasBehavior(
+            DynamicFieldConfig => $DynamicFieldConfig,
+            Behavior           => 'IsCustomerInterfaceCapable',
+        );
+        next DYNAMICFIELD if !$IsCustomerInterfaceCapable;
+
+        push @CSVCustomerDynamicFields, $DynamicFieldConfig;
+    }
+    $Self->{CSVDynamicField} = \@CSVCustomerDynamicFields;
 
     return $Self;
 }
@@ -191,22 +238,35 @@ sub Run {
         }
 
         # get Dynamic fields form param object
-        # cycle trough the activated Dynamic Fields for this screen
+        # cycle through the activated Dynamic Fields for this screen
         DYNAMICFIELD:
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
             next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-            # extract the dynamic field value form the web request
-            my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
-                DynamicFieldConfig     => $DynamicFieldConfig,
-                ParamObject            => $Self->{ParamObject},
-                ReturnProfileStructure => 1,
-                LayoutObject           => $Self->{LayoutObject},
+            # get search field preferences
+            my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+                DynamicFieldConfig => $DynamicFieldConfig,
             );
 
-            # set the comple value structure in GetParam to store it later in the search profile
-            if ( IsHashRefWithData($DynamicFieldValue) ) {
-                %GetParam = ( %GetParam, %{$DynamicFieldValue} );
+            next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
+
+            PREFERENCE:
+            for my $Preference ( @{$SearchFieldPreferences} ) {
+
+                # extract the dynamic field value from the web request
+                my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                    DynamicFieldConfig     => $DynamicFieldConfig,
+                    ParamObject            => $Self->{ParamObject},
+                    ReturnProfileStructure => 1,
+                    LayoutObject           => $Self->{LayoutObject},
+                    Type                   => $Preference->{Type},
+                );
+
+                # set the complete value structure in GetParam to store it later in the search
+                # profile
+                if ( IsHashRefWithData($DynamicFieldValue) ) {
+                    %GetParam = ( %GetParam, %{$DynamicFieldValue} );
+                }
             }
         }
     }
@@ -324,26 +384,49 @@ sub Run {
         my %DynamicFieldSearchParameters;
         my %DynamicFieldSearchDisplay;
 
-        # cycle trough the activated Dynamic Fields for this screen
+        # cycle through the activated Dynamic Fields for this screen
         DYNAMICFIELD:
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
             next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-            # extract the dynamic field value form the web request
-            my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+            # get search field preferences
+            my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
                 DynamicFieldConfig => $DynamicFieldConfig,
-                Profile            => \%GetParam,
-                LayoutObject       => $Self->{LayoutObject},
             );
 
-            # set search parameter
-            if ( defined $SearchParameter ) {
-                $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
-                    = $SearchParameter->{Parameter};
+            next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
 
-                # set value to display
-                $DynamicFieldSearchDisplay{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
-                    = $SearchParameter->{Display};
+            PREFERENCE:
+            for my $Preference ( @{$SearchFieldPreferences} ) {
+
+                my $DynamicFieldValue = $Self->{BackendObject}->SearchFieldValueGet(
+                    DynamicFieldConfig     => $DynamicFieldConfig,
+                    ParamObject            => $Self->{ParamObject},
+                    Type                   => $Preference->{Type},
+                    ReturnProfileStructure => 1,
+                );
+
+                # set the complete value structure in %DynamicFieldValues to discard those where the
+                # value will not be possible to get
+                next PREFERENCE if !IsHashRefWithData($DynamicFieldValue);
+
+                # extract the dynamic field value from the profile
+                my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
+                    DynamicFieldConfig => $DynamicFieldConfig,
+                    Profile            => \%GetParam,
+                    LayoutObject       => $Self->{LayoutObject},
+                    Type               => $Preference->{Type},
+                );
+
+                # set search parameter
+                if ( defined $SearchParameter ) {
+                    $DynamicFieldSearchParameters{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                        = $SearchParameter->{Parameter};
+
+                    # set value to display
+                    $DynamicFieldSearchDisplay{ 'DynamicField_' . $DynamicFieldConfig->{Name} }
+                        = $SearchParameter->{Display};
+                }
             }
         }
 
@@ -1101,39 +1184,29 @@ sub Run {
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
             next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-            my $PossibleValuesFilter;
+            # get search field preferences
+            my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+                DynamicFieldConfig => $DynamicFieldConfig,
+            );
 
-            # check if field has PossibleValues property in its configuration
-            if ( IsHashRefWithData( $DynamicFieldConfig->{Config}->{PossibleValues} ) ) {
+            next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
 
-                # get historical values from database
-                my $HistoricalValues = $Self->{BackendObject}->HistoricalValuesGet(
-                    DynamicFieldConfig => $DynamicFieldConfig,
-                );
+            PREFERENCE:
+            for my $Preference ( @{$SearchFieldPreferences} ) {
 
-                my $Data = $DynamicFieldConfig->{Config}->{PossibleValues};
-
-                # add historic values to current values (if they don't exist anymore)
-                if ( IsHashRefWithData($HistoricalValues) ) {
-                    for my $Key ( keys %{$HistoricalValues} ) {
-                        if ( !$Data->{$Key} ) {
-                            $Data->{$Key} = $HistoricalValues->{$Key}
-                        }
-                    }
-                }
+                # get field html
+                $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+                    = $Self->{BackendObject}->SearchFieldRender(
+                    DynamicFieldConfig   => $DynamicFieldConfig,
+                    Profile              => \%GetParam,
+                    DefaultValue =>
+                        $Self->{Config}->{Defaults}->{DynamicField}
+                        ->{ $DynamicFieldConfig->{Name} },
+                    LayoutObject           => $Self->{LayoutObject},
+                    ConfirmationCheckboxes => 1,
+                    Type                   => $Preference->{Type},
+                    );
             }
-
-            # get field html
-            $DynamicFieldHTML{ $DynamicFieldConfig->{Name} } =
-                $Self->{BackendObject}->SearchFieldRender(
-                DynamicFieldConfig   => $DynamicFieldConfig,
-                Profile              => \%GetParam,
-                PossibleValuesFilter => $PossibleValuesFilter,
-                DefaultValue =>
-                    $Self->{Config}->{Defaults}->{DynamicField}->{ $DynamicFieldConfig->{Name} },
-                LayoutObject           => $Self->{LayoutObject},
-                ConfirmationCheckboxes => 1,
-                );
         }
 
         # generate search mask
@@ -1306,23 +1379,36 @@ sub MaskForm {
     );
 
     # output Dynamic fields blocks
-    # cycle trough the activated Dynamic Fields for this screen
+    # cycle through the activated Dynamic Fields for this screen
     DYNAMICFIELD:
     for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
         next DYNAMICFIELD if !IsHashRefWithData($DynamicFieldConfig);
 
-        # skip fields if HTML could not be retrieved
-        next DYNAMICFIELD if !IsHashRefWithData(
-            $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }
+        # get search field preferences
+        my $SearchFieldPreferences = $Self->{BackendObject}->SearchFieldPreferences(
+            DynamicFieldConfig => $DynamicFieldConfig,
         );
 
-        $Self->{LayoutObject}->Block(
-            Name => 'DynamicField',
-            Data => {
-                Label => $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }->{Label},
-                Field => $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} }->{Field},
-            },
-        );
+        next DYNAMICFIELD if !IsArrayRefWithData($SearchFieldPreferences);
+
+        PREFERENCE:
+        for my $Preference ( @{$SearchFieldPreferences} ) {
+
+            # skip fields that HTML could not be retrieved
+            next PREFERENCE if !IsHashRefWithData(
+                $Param{DynamicFieldHTML}->{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
+            );
+
+            $Self->{LayoutObject}->Block(
+                Name => 'DynamicField',
+                Data => {
+                    Label => $Param{DynamicFieldHTML}
+                        ->{ $DynamicFieldConfig->{Name} . $Preference->{Type} }->{Label},
+                    Field => $Param{DynamicFieldHTML}
+                        ->{ $DynamicFieldConfig->{Name} . $Preference->{Type} }->{Field},
+                },
+            );
+        }
     }
 
     # show languages select
