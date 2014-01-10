@@ -225,7 +225,7 @@ sub Run {
             }
         }
 
-        # get Dynamic fields form param object
+        # get Dynamic fields from param object
         # cycle through the activated Dynamic Fields for this screen
         DYNAMICFIELD:
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {

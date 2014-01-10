@@ -209,7 +209,7 @@ sub Run {
         # output faq dynamic fields
         $Self->_PDFOutputFAQDynamicFields(
             PageData => \%Page,
-            FAQData  => \%FAQ,
+            FAQData  => \%FAQData,
         );
 
         $Self->_PDFOuputFAQContent(

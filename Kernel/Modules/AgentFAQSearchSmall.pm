@@ -64,7 +64,7 @@ sub new {
     # get the dynamic fields for ticket object
     $Self->{DynamicField} = $Self->{DynamicFieldObject}->DynamicFieldListGet(
         Valid       => 1,
-        ObjectType  => [ 'FAQ ],
+        ObjectType  => 'FAQ',
         FieldFilter => $Self->{DynamicFieldFilter} || {},
     );
 
@@ -155,7 +155,7 @@ sub Run {
             }
         }
 
-        # get Dynamic fields form param object
+        # get Dynamic fields from param object
         # cycle trough the activated Dynamic Fields for this screen
         DYNAMICFIELD:
         for my $DynamicFieldConfig ( @{ $Self->{DynamicField} } ) {
@@ -449,21 +449,10 @@ sub Run {
             PREFERENCE:
             for my $Preference ( @{$SearchFieldPreferences} ) {
 
-                if (
-                    !$AttributeLookup{
-                        'LabelSearch_DynamicField_'
-                            . $DynamicFieldConfig->{Name}
-                            . $Preference->{Type}
-                    }
-                    )
-                {
-                    next PREFERENCE;
-                }
-
                 # extract the dynamic field value from the profile
                 my $SearchParameter = $Self->{BackendObject}->SearchFieldParameterBuild(
                     DynamicFieldConfig => $DynamicFieldConfig,
-                    Profile            => \%GetParam,
+                    Profile            => \%Param,
                     LayoutObject       => $Self->{LayoutObject},
                     Type               => $Preference->{Type},
                 );
@@ -877,7 +866,7 @@ sub _MaskForm {
             $DynamicFieldHTML{ $DynamicFieldConfig->{Name} . $Preference->{Type} }
                 = $Self->{BackendObject}->SearchFieldRender(
                 DynamicFieldConfig   => $DynamicFieldConfig,
-                Profile              => \%GetParam,
+                Profile              => \%Param,
                 DefaultValue =>
                     $Self->{Config}->{Defaults}->{DynamicField}
                     ->{ $DynamicFieldConfig->{Name} },
