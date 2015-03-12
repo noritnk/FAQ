@@ -497,11 +497,11 @@ sub Run {
         # 1 Shows the SubcategoryIDs of Category 1.
         # 2 and 3 are empty hashes because these categories don't have subcategories.
         #
-        # Keys of the inner hashes are CategoryIDs a user is allowed to have rw access to.
+        # Keys of the inner hashes are CategoryIDs a user is allowed to have ro access to.
         # Values are the Category names.
 
         my $UserCatGroup = $Self->{FAQObject}->GetUserCategories(
-            Type   => 'rw',
+            Type   => 'ro',
             UserID => $Self->{UserID},
         );
 
@@ -1353,7 +1353,7 @@ sub _MaskForm {
 
     # get categories (with category long names) where user has rights
     my $UserCategoriesLongNames = $Self->{FAQObject}->GetUserCategoriesLongNames(
-        Type   => 'rw',
+        Type   => 'ro',
         UserID => $Self->{UserID},
     );
 
@@ -1469,7 +1469,7 @@ sub _MaskForm {
         my $GroupID = $Self->{GroupObject}->GroupLookup( Group => $Group );
         my %Users = $Self->{GroupObject}->GroupMemberList(
             GroupID => $GroupID,
-            Type    => 'rw',
+            Type    => 'ro',
             Result  => 'HASH',
         );
         %GroupUsers = ( %GroupUsers, %Users );
